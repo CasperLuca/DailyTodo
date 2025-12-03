@@ -3,13 +3,28 @@ import {
   ReactRNPlugin,
 } from "@remnote/plugin-sdk";
 
+/* ---------- Settings & storage keys ---------- */
+
 const SETTING_AUTO_ENABLED = "auto_roll_enabled";
 const SETTING_AUTO_HOUR = "auto_roll_hour";
 const SETTING_AUTO_MINUTE = "auto_roll_minute";
 
 const STORAGE_LAST_RUN_DATE = "daily_todo_rollover_last_run";
 
+/* ---------- Rem name constants ---------- */
+
+const ROOT_NOTEBOOK_NAME = "Notepad";
+const TODO_DOC_NAME = "Todo";
+const TODAY_NAME = "Today";
+const REPEATING_NAME = "Repeating";
+const COMPLETED_NAME = "Completed";
+const HEADING_STYLE_CHILD_NAME = "Size";
+
+/* ---------- State ---------- */
+
 let intervalId: number | undefined;
+
+/* ---------- Helpers ---------- */
 
 function todayKey() {
   const now = new Date();
@@ -31,42 +46,26 @@ async function richTextToString(
 }
 
 /**
- * Find the Todo document that lives under a parent named "Notepad",
+ * Find the Todo document that lives under a parent named ROOT_NOTEBOOK_NAME,
  * anywhere in the knowledge base.
  */
 async function findTodoDocument(plugin: ReactRNPlugin) {
-  console.log("[rollover] Global search for Todo under Notepad…");
-
-  const results = await plugin.search.search(["Todo"]);
-  console.log("[rollover] Found Todo candidates:", results.length);
+  const results = await plugin.search.search([TODO_DOC_NAME]);
 
   for (const rem of results) {
     const txt = normName(await richTextToString(plugin, rem.text));
-    if (txt !== "Todo") continue;
-
-    console.log("[rollover] Checking a Todo candidate:", rem._id);
+    if (txt !== TODO_DOC_NAME) continue;
 
     let parent = await rem.getParentRem();
     while (parent) {
-      const pTextRaw = await richTextToString(plugin, parent.text);
-      const pText = normName(pTextRaw);
-      console.log(
-        "[rollover]   parent raw:",
-        JSON.stringify(pTextRaw),
-        "norm:",
-        JSON.stringify(pText)
-      );
-
-      if (pText === "Notepad") {
-        console.log("[rollover] Matched path Notepad/Todo.");
+      const pText = normName(await richTextToString(plugin, parent.text));
+      if (pText === ROOT_NOTEBOOK_NAME) {
         return { notepad: parent, todoDoc: rem };
       }
-
       parent = await parent.getParentRem();
     }
   }
 
-  console.log("[rollover] No Notepad/Todo path found.");
   return { notepad: undefined, todoDoc: undefined };
 }
 
@@ -84,38 +83,26 @@ async function getChildByName(
 }
 
 /**
- * Find Today / Repeating / Completed under the Todo doc.
+ * Locate the Today / Repeating / Completed sections under the Todo doc.
  */
 async function findTodoSections(plugin: ReactRNPlugin) {
   const { notepad, todoDoc } = await findTodoDocument(plugin);
 
-  if (!notepad) {
-    console.error("[rollover] No Notepad found in path.");
-    return {
-      notepad: undefined,
-      todoDoc: undefined,
-      today: undefined,
-      repeating: undefined,
-      completed: undefined,
-    };
-  }
-
-  if (!todoDoc) {
-    console.error("[rollover] Todo not found under Notepad.");
+  if (!notepad || !todoDoc) {
     return {
       notepad,
-      todoDoc: undefined,
+      todoDoc,
       today: undefined,
       repeating: undefined,
       completed: undefined,
     };
   }
 
-  const today = await getChildByName(plugin, todoDoc, "Today");
-  const repeating = await getChildByName(plugin, todoDoc, "Repeating");
-  const completed = await getChildByName(plugin, todoDoc, "Completed");
+  const today = await getChildByName(plugin, todoDoc, TODAY_NAME);
+  const repeating = await getChildByName(plugin, todoDoc, REPEATING_NAME);
+  const completed = await getChildByName(plugin, todoDoc, COMPLETED_NAME);
 
-  console.log("[rollover] Section presence:", {
+  console.log("[DailyTodo] Sections:", {
     today: !!today,
     repeating: !!repeating,
     completed: !!completed,
@@ -124,25 +111,23 @@ async function findTodoSections(plugin: ReactRNPlugin) {
   return { notepad, todoDoc, today, repeating, completed };
 }
 
+/* ---------- Core rollover logic ---------- */
+
 /**
- * Main rollover logic with feature-detected transaction.
+ * Main rollover:
+ * 1) Archive finished todos from Today → Completed (dedup, newest on top)
+ * 2) Copy Repeating → Today as unfinished todos (no duplicates, skip “Size”)
  */
 async function runRollover(plugin: ReactRNPlugin) {
-  console.log("[rollover] Starting rollover…");
+  console.log("[DailyTodo] Starting rollover…");
 
   const { notepad, todoDoc, today, repeating, completed } =
     await findTodoSections(plugin);
 
-  if (!notepad) {
-    console.error("[rollover] Aborting: Notepad not found.");
-    return;
-  }
-  if (!todoDoc) {
-    console.error("[rollover] Aborting: Todo not found under Notepad.");
-    return;
-  }
-  if (!today || !repeating || !completed) {
-    console.error("[rollover] Missing required sections.", {
+  if (!notepad || !todoDoc || !today || !repeating || !completed) {
+    console.warn("[DailyTodo] Missing required structure; aborting.", {
+      notepad: !!notepad,
+      todoDoc: !!todoDoc,
       today: !!today,
       repeating: !!repeating,
       completed: !!completed,
@@ -150,12 +135,12 @@ async function runRollover(plugin: ReactRNPlugin) {
     return;
   }
 
-  console.log("[rollover] Structure OK. Preparing to modify…");
-
   const mutate = async () => {
-    /***** 1) Move finished todos from Today → Completed (deduping) *****/
+    /* --- 1) Archive finished todos from Today → Completed --- */
+
     const todayChildren = await today.getChildrenRem();
-    console.log("[rollover] Today children before cleanup:", todayChildren.length);
+    type FinishedTodo = { rem: any; text: string };
+    const finished: FinishedTodo[] = [];
 
     for (const child of todayChildren) {
       const isTodo = await child.isTodo();
@@ -167,42 +152,54 @@ async function runRollover(plugin: ReactRNPlugin) {
       const plainText = normName(
         await richTextToString(plugin, child.text)
       );
-      if (!plainText) {
-        console.log("[rollover] Skipping finished todo with empty text.");
-        continue;
-      }
+      if (!plainText) continue;
 
-      console.log("[rollover] Archiving finished todo:", plainText);
+      finished.push({ rem: child, text: plainText });
+    }
 
-      // Remove any existing duplicates in Completed
+    if (finished.length > 0) {
+      console.log(
+        "[DailyTodo] Finished todos to archive:",
+        finished.map((f) => f.text)
+      );
+    }
+
+    // Delete existing duplicates in Completed
+    if (finished.length > 0) {
       const completedChildren = await completed.getChildrenRem();
-      for (const c of completedChildren) {
-        const cText = normName(
-          await richTextToString(plugin, c.text)
-        );
-        if (!cText) continue;
-        if (cText !== plainText) continue;
+      const toDelete = new Set<string>();
 
-        console.log("[rollover] Deleting duplicate from Completed:", cText);
-        const anyRem = c as any;
-        if (typeof anyRem.remove === "function") {
-          await anyRem.remove();
-        } else {
-          // Fallback: if remove() doesn't exist, just log it and keep it
-          console.warn(
-            "[rollover] remove() not available; cannot delete duplicate for",
-            cText
+      for (const { text } of finished) {
+        for (const c of completedChildren) {
+          const cText = normName(
+            await richTextToString(plugin, c.text)
           );
+          if (!cText) continue;
+          if (cText !== text) continue;
+          toDelete.add(c._id);
         }
       }
 
-      // Turn into plain rem and move under Completed
-      await child.setIsTodo(false);
-      await child.setIsListItem(false);
-      await child.setParent(completed, 0);
+      for (const c of completedChildren) {
+        if (!toDelete.has(c._id)) continue;
+        const anyRem = c as any;
+        if (typeof anyRem.remove === "function") {
+          await anyRem.remove();
+        }
+      }
     }
 
-    /***** Rebuild set of existing unfinished todos in Today *****/
+    // Move finished todos to top of Completed as plain rems
+    for (const { rem, text } of finished) {
+      await rem.setIsTodo(false);
+      await rem.setIsListItem(false);
+      // Your runtime supports position index as second argument
+      await rem.setParent(completed, 0);
+      console.log("[DailyTodo] Archived:", text);
+    }
+
+    /* --- 2) Rebuild set of existing unfinished todos in Today --- */
+
     const todayChildrenAfter = await today.getChildrenRem();
     const existingUnfinished = new Set<string>();
 
@@ -221,87 +218,53 @@ async function runRollover(plugin: ReactRNPlugin) {
       existingUnfinished.add(txt);
     }
 
-    console.log(
-      "[rollover] Existing unfinished todos in Today:",
-      Array.from(existingUnfinished)
-    );
+    /* --- 3) Copy Repeating → Today as new unfinished todos --- */
 
-    /***** 2) Copy children of Repeating → Today as new unfinished todos *****/
     const repeatingChildren = await repeating.getChildrenRem();
-    console.log("[rollover] Repeating children:", repeatingChildren.length);
-    
+
     for (const source of repeatingChildren) {
       const plainText = normName(
         await richTextToString(plugin, source.text)
       );
 
-      // Skip empty lines
-      if (!plainText) {
-        console.log("[rollover] Skipping empty repeating item.");
-        continue;
-      }
+      if (!plainText) continue;
+      if (plainText === HEADING_STYLE_CHILD_NAME) continue;
 
-      // Skip style/slot rems like "Size" under a heading
-      if (plainText === "Size") {
-        console.log("[rollover] Skipping style/slot rem 'Size'.");
-        continue;
-      }
+      if (existingUnfinished.has(plainText)) continue;
 
-      // Skip if an unfinished todo with same text already exists in Today
-      if (existingUnfinished.has(plainText)) {
-        console.log(
-          "[rollover] Skipping duplicate repeating item already in Today:",
-          plainText
-        );
-        continue;
-      }
-
-      console.log("[rollover] Copying repeating item:", plainText);
-
-      // Ensure Repeating item itself is plain, not a todo
       if (await source.isTodo()) {
         await source.setIsTodo(false);
       }
 
       const newRem = await plugin.rem.createRem();
-      if (!newRem) {
-        console.error("[rollover] Failed to create new rem for:", plainText);
-        continue;
-      }
+      if (!newRem) continue;
 
       await newRem.setParent(today);
-
-      // Plain string text (no heading / formatting)
       await newRem.setText([plainText]);
-
       await newRem.setIsTodo(true);
       await newRem.setTodoStatus("Unfinished");
 
-      // Track so later repeating items with same text don't create duplicates
       existingUnfinished.add(plainText);
     }
   };
 
+  // Feature-detect transaction support
   const appAny = plugin.app as any;
   if (typeof appAny.transaction === "function") {
-    console.log("[rollover] Using plugin.app.transaction.");
     await appAny.transaction(mutate);
   } else {
-    console.warn(
-      "[rollover] plugin.app.transaction not available; running without transaction."
-    );
     await mutate();
   }
 
-  console.log("[rollover] Rollover completed.");
+  console.log("[DailyTodo] Rollover completed.");
   await plugin.app.toast("Daily rollover done.");
 }
 
-/**
- * Auto daily trigger (if you want it).
- */
+/* ---------- Scheduled rollover ---------- */
+
 async function maybeRunScheduledRollover(plugin: ReactRNPlugin) {
-  const enabled = await plugin.settings.getSetting<boolean>(SETTING_AUTO_ENABLED);
+  const enabled =
+    await plugin.settings.getSetting<boolean>(SETTING_AUTO_ENABLED);
   if (!enabled) return;
 
   const hour =
@@ -320,19 +283,18 @@ async function maybeRunScheduledRollover(plugin: ReactRNPlugin) {
   if (nowMinutes < targetMinutes) return;
 
   try {
-    console.log("[rollover] Auto-triggered rollover executing…");
+    console.log("[DailyTodo] Auto rollover triggered.");
     await runRollover(plugin);
     await plugin.storage.setLocal(STORAGE_LAST_RUN_DATE, today);
   } catch (e) {
-    console.error("[rollover] Auto-rollover error:", e);
+    console.error("[DailyTodo] Auto rollover error:", e);
   }
 }
 
-/**
- * Plugin lifecycle
- */
+/* ---------- Plugin lifecycle ---------- */
+
 async function onActivate(plugin: ReactRNPlugin) {
-  console.log("[rollover] Plugin activated.");
+  console.log("[DailyTodo] Plugin activated.");
 
   await plugin.settings.registerBooleanSetting({
     id: SETTING_AUTO_ENABLED,
@@ -358,12 +320,12 @@ async function onActivate(plugin: ReactRNPlugin) {
     description:
       "Copy Repeating → Today and move finished todos Today → Completed.",
     action: async () => {
-      console.log("[rollover] Manual command invoked.");
+      console.log("[DailyTodo] Manual command invoked.");
       try {
         await runRollover(plugin);
         await plugin.storage.setLocal(STORAGE_LAST_RUN_DATE, todayKey());
       } catch (e) {
-        console.error("[rollover] Manual rollover error:", e);
+        console.error("[DailyTodo] Manual rollover error:", e);
         await plugin.app.toast("Error: " + String(e));
       }
     },
@@ -376,7 +338,7 @@ async function onActivate(plugin: ReactRNPlugin) {
 
 async function onDeactivate(plugin: ReactRNPlugin) {
   if (intervalId !== undefined) clearInterval(intervalId);
-  console.log("[rollover] Plugin deactivated.");
+  console.log("[DailyTodo] Plugin deactivated.");
 }
 
 declareIndexPlugin(onActivate, onDeactivate);
