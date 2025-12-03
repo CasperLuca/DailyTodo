@@ -18,11 +18,11 @@ A small plugin for RemNote that automates daily task management:
 
 For the plugin to work properly, your RemNote database must include exactly this structure of rems (names are case-sensitive):
 
-> Notepad
-> - Todo
-> - Today
-> - Repeating
-> - Completed
+> - Notepad
+>   - Todo
+>   - Today
+>   - Repeating
+>   - Completed
 
 - Under `Todo`, there are direct child rems named `Today`, `Repeating`, and `Completed`.  
 - Under `Repeating`, only plain rems represent tasks - avoid heading-style children (to prevent unwanted "Size" rems).  
