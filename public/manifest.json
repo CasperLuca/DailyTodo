@@ -15,8 +15,7 @@
   "requestNative": false,
   "requiredScopes": [
     {
-      "type": "DescendantsOfName",
-      "remName": "Todo",
+      "type": "All",
       "level": "ReadCreateModifyDelete"
     }
   ]
