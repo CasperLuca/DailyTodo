@@ -1,0 +1,23 @@
+{
+  "author": "CasperLuca",
+  "name": "DailyTodo",
+  "description": "A plugin that moves repeating and completed todos on a daily basis",
+  "enableOnMobile": false,
+  "id": "CasperLuca_DailyTodo",
+  "unlisted": true,
+  "repoUrl": "https://github.com/CasperLuca/DailyTodo",
+  "manifestVersion": 1,
+  "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "requestNative": false,
+  "requiredScopes": [
+    {
+      "type": "DescendantsOfName",
+      "remName": "Todo",
+      "level": "ReadCreateModifyDelete"
+    }
+  ]
+}
