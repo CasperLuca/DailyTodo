@@ -65,5 +65,5 @@ If any of these are missing or renamed, the plugin will abort and log an error i
 
 ## License & Status
 
-- License: MIT (or whatever you prefer — see LICENSE file)  
+- License: MIT (see LICENSE file)  
 - Status: **Private / unlisted — personal project**  
