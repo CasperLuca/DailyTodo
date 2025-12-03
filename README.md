@@ -16,20 +16,18 @@ A small plugin for RemNote that automates daily task management:
 
 ## Assumptions & Requirements
 
-For the plugin to work properly, your RemNote database must include exactly this structure (names are case-sensitive):
+For the plugin to work properly, your RemNote database must include exactly this structure of rems (names are case-sensitive):
 
-Notepad
->>Todo
->>Today
->>Repeating
->>Completed
+> Notepad
+> - Todo
+> - Today
+> - Repeating
+> - Completed
 
-
-- `Notepad` is a top-level rem (or somewhere in your KB).  
 - Under `Todo`, there are direct child rems named `Today`, `Repeating`, and `Completed`.  
 - Under `Repeating`, only plain rems represent tasks - avoid heading-style children (to prevent unwanted "Size" rems).  
 
-If any of these are missing or renamed, the plugin will abort and log an error.
+If any of these are missing or renamed, the plugin will abort and log an error in the console.
 
 ##  Installation & Use (Local)
 
@@ -48,10 +46,11 @@ If any of these are missing or renamed, the plugin will abort and log an error.
 
 - **Manual run**: open Omnibar (Ctrl+P), type `Daily Todo Rollover: run now`, hit enter.  
 - **Automatic daily rollover**: leave plugin enabled; by default it triggers after 07:00 — you can adjust hour / minute in Settings.  
-- **What it does**:
 
-Today (finished todos) : Moved to Completed (plain rem, newest at top)
-Repeating moved to Today : Created as new unfinished todos (if not already present) |
+**What it does**:
+
+- Today (finished todos) : Moved to Completed (plain rem, newest at top)
+- Repeating moved to Today : Created as new unfinished todos (if not already present) |
 
 ---
 
